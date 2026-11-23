@@ -1,0 +1,29 @@
+groups:
+  - name: fincore
+    rules:
+      - alert: LedgerIntegrityFailed
+        expr: fincore_ledger_integrity_ok == 0
+        labels: { severity: page }
+        annotations:
+          summary: Ledger integrity check failed — balances do not match postings or the trial balance is off.
+      - alert: LedgerIntegrityCheckStale
+        expr: time() - fincore_ledger_integrity_last_check_timestamp_seconds > 900
+        labels: { severity: warn }
+        annotations:
+          summary: Ledger integrity has not been checked for 15 minutes (is the worker running?).
+      - alert: OutboxBacklog
+        expr: fincore_outbox_oldest_pending_seconds > 300
+        labels: { severity: warn }
+        annotations:
+          summary: Merchant webhooks are more than 5 minutes behind.
+      - alert: OutboxDeadLetters
+        expr: increase(fincore_outbox_deliveries_total{result="dead"}[15m]) > 0
+        labels: { severity: warn }
+        annotations:
+          summary: Merchant webhook events were dead-lettered.
+      - alert: HighServerErrorRate
+        expr: sum(rate(fincore_http_requests_total{status=~"5.."}[5m])) / sum(rate(fincore_http_requests_total[5m])) > 0.02
+        for: 5m
+        labels: { severity: page }
+        annotations:
+          summary: More than 2% of API requests are failing with 5xx.

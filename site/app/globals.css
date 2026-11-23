@@ -1,0 +1,216 @@
+@import "tailwindcss";
+
+/* Same tokens as dashboard/DESIGN.md: white gallery, black structure,
+   one neon pulse, Helvetica Neue 400 only. */
+@theme {
+  --font-sans: "Helvetica Neue", Helvetica, Inter, Arial, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  --color-ink: var(--c-ink);
+  --color-white: var(--c-paper);
+  --color-warm-gray: var(--c-warm-gray);
+  --color-mist: var(--c-mist);
+  --color-fog: var(--c-fog);
+  --color-slate: var(--c-slate);
+  --color-iris: #8b8893;
+  --color-pulse: #ff17e9;
+
+  --text-caption: 12px;
+  --text-caption--line-height: 1.78;
+  --text-caption--letter-spacing: 0.08em;
+  --text-label: 14px;
+  --text-label--line-height: 1.6;
+  --text-label--letter-spacing: 0.02em;
+  --text-body: 16px;
+  --text-body--line-height: 1.5;
+  --text-body--letter-spacing: -0.01em;
+  --text-subheading: 18px;
+  --text-subheading--line-height: 1.45;
+  --text-subheading--letter-spacing: -0.01em;
+  --text-heading-sm: 24px;
+  --text-heading-sm--line-height: 1.2;
+  --text-heading-sm--letter-spacing: -0.01em;
+  --text-heading: 32px;
+  --text-heading--line-height: 1.13;
+  --text-heading--letter-spacing: -0.03em;
+  --text-heading-lg: 48px;
+  --text-heading-lg--line-height: 1.08;
+  --text-heading-lg--letter-spacing: -0.03em;
+  --text-display: 64px;
+  --text-display--line-height: 0.95;
+  --text-display--letter-spacing: -0.05em;
+
+  --tracking-display: -0.05em;
+
+  --radius-card: 16px;
+  --radius-link: 24px;
+  --radius-large: 48px;
+  --radius-pill: 64px;
+  --radius-tag: 100px;
+
+  --shadow-nav: var(--c-nav-shadow) 0px 12px 60px 0px;
+  --color-band: var(--c-band);
+  --color-band-card: var(--c-band-card);
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+/* ---------------------------------------------------------------------------
+   Light / dark. Every color is a variable; dark mode inverts the gallery
+   (black canvas, white type) and keeps the single neon pulse. The theme is
+   chosen by data-theme on <html>, falling back to the OS setting.
+--------------------------------------------------------------------------- */
+:root {
+  --c-ink: #000000;
+  --c-paper: #ffffff;
+  --c-warm-gray: #736f7c;
+  --c-mist: #dedede;
+  --c-fog: #bdbdbd;
+  --c-slate: #7f7f7f;
+  --c-band: #000000;
+  --c-band-card: #111111;
+  --c-nav-shadow: rgba(0, 0, 0, 0.15);
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --c-ink: #ffffff;
+  --c-paper: #000000;
+  --c-warm-gray: #a29fab;
+  --c-mist: #2b2b2b;
+  --c-fog: #5f5f5f;
+  --c-slate: #8f8f8f;
+  --c-band: #111111;
+  --c-band-card: #1c1c1c;
+  --c-nav-shadow: rgba(0, 0, 0, 0.6);
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --c-ink: #ffffff;
+    --c-paper: #000000;
+    --c-warm-gray: #a29fab;
+    --c-mist: #2b2b2b;
+    --c-fog: #5f5f5f;
+    --c-slate: #8f8f8f;
+    --c-band: #111111;
+    --c-band-card: #1c1c1c;
+    --c-nav-shadow: rgba(0, 0, 0, 0.6);
+    color-scheme: dark;
+  }
+}
+
+/* Bands are white-on-black in both themes: inside one, the palette is pinned
+   to its light-mode values, and only the band surface itself shifts. */
+.band {
+  --color-ink: #000000;
+  --color-white: #ffffff;
+  --color-warm-gray: #736f7c;
+  --color-mist: #dedede;
+  --color-fog: #bdbdbd;
+  --color-slate: #7f7f7f;
+  background-color: var(--c-band);
+  color: #ffffff;
+}
+
+/* Theme toggle shows the icon for the theme you would switch to. */
+.theme-icon-light { display: none; }
+:root[data-theme="dark"] .theme-icon-light { display: block; }
+:root[data-theme="dark"] .theme-icon-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .theme-icon-light { display: block; }
+  :root:not([data-theme="light"]) .theme-icon-dark { display: none; }
+}
+
+html {
+  scroll-behavior: smooth;
+}
+
+body {
+  background: var(--c-paper);
+  color: var(--c-ink);
+  font-family: var(--font-sans);
+  font-weight: 400;
+  overflow-x: clip;
+  -webkit-font-smoothing: antialiased;
+}
+
+h1, h2, h3, h4, strong, b, th { font-weight: 400; }
+::selection { background: var(--c-ink); color: var(--c-paper); }
+:focus-visible { outline: 1px solid currentColor; outline-offset: 3px; }
+
+/* ---------------------------------------------------------------------------
+   Reveal-on-scroll. <Motion /> adds .reached when an element enters view.
+   Titles rise word by word; words wrapped in <strong> flash neon letter by
+   letter, then settle to black ("colorful oscillation").
+--------------------------------------------------------------------------- */
+@keyframes fadein {
+  from { transform: translateY(15%); opacity: 0; }
+  to { transform: translateY(0); opacity: 1; }
+}
+@keyframes colorful-oscillation {
+  0% { transform: translateY(-15%); opacity: 0; color: var(--color-pulse); }
+  35% { transform: translateY(15%); color: var(--color-pulse); }
+  100% { transform: translateY(0); opacity: 1; color: var(--osc-to, var(--c-ink)); }
+}
+@keyframes appear {
+  from { transform: scale(0.6); opacity: 0; }
+  to { transform: scale(1); opacity: 1; }
+}
+
+.will-animate .word,
+.will-animate .letter,
+.will-animate.fade,
+.will-animate .fade-child { opacity: 0; }
+
+.reached .word { display: inline-block; animation: fadein 1.5s var(--ease-out-expo) both; animation-delay: calc(var(--i, 0) * 140ms + 140ms); }
+.reached .letter { display: inline-block; animation: colorful-oscillation 1s var(--ease-out-expo) both; animation-delay: calc(var(--i, 0) * 140ms + var(--l, 0) * 75ms + 140ms); }
+.reached.fade { animation: fadein 1.5s var(--ease-out-expo) both; animation-delay: var(--delay, 0ms); }
+.reached .fade-child { animation: fadein 1.2s var(--ease-out-expo) both; animation-delay: calc(var(--i, 0) * 90ms + 200ms); }
+.dark-title .letter { --osc-to: #fff; }
+
+/* ---------------------------------------------------------------------------
+   Infinite marquees (cards and wordmarks). Content is rendered twice and the
+   track slides by exactly one copy, so the loop is seamless.
+--------------------------------------------------------------------------- */
+@keyframes marquee { from { transform: translateX(0); } to { transform: translateX(-50%); } }
+.marquee { display: flex; width: max-content; animation: marquee var(--duration, 60s) linear infinite; }
+.marquee-reverse { animation-direction: reverse; }
+.marquee-host:hover .marquee { animation-play-state: paused; }
+
+/* Neon halo that slowly orbits behind panels. */
+@keyframes rotate-halo {
+  0% { transform: translate(calc(-50% + 30px), -50%); }
+  25% { transform: translate(-50%, calc(-50% + 30px)); }
+  50% { transform: translate(calc(-50% - 30px), -50%); }
+  75% { transform: translate(-50%, calc(-50% - 30px)); }
+  100% { transform: translate(calc(-50% + 30px), -50%); }
+}
+.halo {
+  position: absolute; left: 50%; top: 50%; width: 70%; aspect-ratio: 1; border-radius: 9999px;
+  background: radial-gradient(circle, rgba(255, 23, 233, 0.55) 0%, rgba(255, 23, 233, 0.12) 45%, transparent 70%);
+  filter: blur(40px); animation: rotate-halo 12s linear infinite; pointer-events: none;
+}
+
+@keyframes wiggle { 0% { transform: rotate(-8deg); } 50% { transform: rotate(0); } 100% { transform: rotate(8deg); } }
+.wiggle { animation: wiggle 2.4s ease-in-out infinite alternate; }
+@keyframes float { 0%, 100% { transform: translateY(0); } 50% { transform: translateY(-10px); } }
+.float { animation: float 5s ease-in-out infinite; }
+@keyframes spark { from { transform: translate(0, 0); } to { transform: translate(12px, 12px); } }
+.spark { animation: spark 3s ease-in-out infinite alternate; }
+
+/* Tab progress bar fills over the auto-advance interval. */
+@keyframes progress { from { transform: scaleX(0); } to { transform: scaleX(1); } }
+.tab-progress { transform-origin: left; animation: progress var(--tab-duration, 6s) linear forwards; }
+
+/* Ledger rows slide in one after another inside the tab panel. */
+@keyframes row-in { from { opacity: 0; transform: translateX(-12px); } to { opacity: 1; transform: none; } }
+.row-in { animation: row-in 0.7s var(--ease-out-expo) both; animation-delay: calc(var(--i, 0) * 120ms + 150ms); }
+
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { animation-duration: 0.001ms !important; animation-iteration-count: 1 !important; animation-delay: 0ms !important; }
+  .will-animate .word, .will-animate .letter, .will-animate.fade, .will-animate .fade-child { opacity: 1; }
+  html { scroll-behavior: auto; }
+}

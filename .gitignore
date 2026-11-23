@@ -1,0 +1,12 @@
+.env
+/bin/
+*.test
+*.out
+internal/**/testdata/rapid/
+# dashboard
+dashboard/node_modules/
+dashboard/.next/
+
+# landing site
+site/node_modules/
+site/.next/

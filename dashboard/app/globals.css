@@ -1,0 +1,172 @@
+@import "tailwindcss";
+
+/* FinCore design tokens — see DESIGN.md. Light and dark themes. */
+@theme {
+  --font-sans: "Helvetica Neue", Helvetica, Inter, Arial, ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
+
+  /* Colors: an achromatic system with one neon pulse. */
+  --color-ink: var(--c-ink);
+  --color-white: var(--c-paper);
+  --color-warm-gray: var(--c-warm-gray);
+  --color-mist: var(--c-mist);
+  --color-fog: var(--c-fog);
+  --color-slate: var(--c-slate);
+  --color-iris: #8b8893;
+  --color-pulse: #ff17e9;
+
+  /* Type scale: size, line-height and tracking travel together. */
+  --text-caption: 12px;
+  --text-caption--line-height: 1.78;
+  --text-caption--letter-spacing: 0.08em;
+  --text-label: 14px;
+  --text-label--line-height: 1.78;
+  --text-label--letter-spacing: 0.08em;
+  --text-data: 14px;
+  --text-data--line-height: 1.5;
+  --text-data--letter-spacing: 0;
+  --text-body: 16px;
+  --text-body--line-height: 1.33;
+  --text-body--letter-spacing: -0.01em;
+  --text-subheading: 18px;
+  --text-subheading--line-height: 1.33;
+  --text-subheading--letter-spacing: -0.01em;
+  --text-heading-sm: 24px;
+  --text-heading-sm--line-height: 1.2;
+  --text-heading-sm--letter-spacing: -0.01em;
+  --text-heading: 32px;
+  --text-heading--line-height: 1.13;
+  --text-heading--letter-spacing: -0.03em;
+  --text-heading-lg: 48px;
+  --text-heading-lg--line-height: 1.13;
+  --text-heading-lg--letter-spacing: -0.03em;
+  --text-display: 64px;
+  --text-display--line-height: 0.95;
+  --text-display--letter-spacing: -0.05em;
+  --text-display-xl: 200px;
+  --text-display-xl--line-height: 0.8;
+  --text-display-xl--letter-spacing: -0.05em;
+
+  --tracking-display: -0.05em;
+  --tracking-label: 0.08em;
+
+  /* Shapes */
+  --radius-card: 16px;
+  --radius-link: 24px;
+  --radius-large: 48px;
+  --radius-pill: 64px;
+  --radius-tag: 100px;
+
+  /* The only elevation in the system: the sticky nav. */
+  --shadow-nav: var(--c-nav-shadow) 0px 12px 60px 0px;
+  --color-band: var(--c-band);
+  --color-sidebar: var(--c-sidebar);
+  --color-chart-context: var(--c-chart-context);
+  --color-band-card: var(--c-band-card);
+}
+
+/* ---------------------------------------------------------------------------
+   Light / dark. Every color is a variable; dark mode inverts the gallery
+   (black canvas, white type) and keeps the single neon pulse. The theme is
+   chosen by data-theme on <html>, falling back to the OS setting.
+--------------------------------------------------------------------------- */
+:root {
+  --c-ink: #000000;
+  --c-paper: #ffffff;
+  --c-warm-gray: #736f7c;
+  --c-mist: #dedede;
+  --c-fog: #bdbdbd;
+  --c-slate: #7f7f7f;
+  --c-band: #000000;
+  --c-band-card: #111111;
+  --c-nav-shadow: rgba(0, 0, 0, 0.15);
+  --c-chart-context: #8a8794;
+  --c-sidebar: #fafafa;
+  color-scheme: light;
+}
+:root[data-theme="dark"] {
+  --c-ink: #ffffff;
+  --c-paper: #000000;
+  --c-warm-gray: #a29fab;
+  --c-mist: #2b2b2b;
+  --c-fog: #5f5f5f;
+  --c-slate: #8f8f8f;
+  --c-band: #111111;
+  --c-band-card: #1c1c1c;
+  --c-nav-shadow: rgba(0, 0, 0, 0.6);
+  --c-chart-context: #8f8f8f;
+  --c-sidebar: #0a0a0a;
+  color-scheme: dark;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --c-ink: #ffffff;
+    --c-paper: #000000;
+    --c-warm-gray: #a29fab;
+    --c-mist: #2b2b2b;
+    --c-fog: #5f5f5f;
+    --c-slate: #8f8f8f;
+    --c-band: #111111;
+    --c-band-card: #1c1c1c;
+    --c-nav-shadow: rgba(0, 0, 0, 0.6);
+    --c-chart-context: #8f8f8f;
+    --c-sidebar: #0a0a0a;
+    color-scheme: dark;
+  }
+}
+
+/* Bands are white-on-black in both themes: inside one, the palette is pinned
+   to its light-mode values, and only the band surface itself shifts. */
+.band {
+  --color-ink: #000000;
+  --color-white: #ffffff;
+  --color-warm-gray: #736f7c;
+  --color-mist: #dedede;
+  --color-fog: #bdbdbd;
+  --color-slate: #7f7f7f;
+  background-color: var(--c-band);
+  color: #ffffff;
+}
+
+/* Theme toggle shows the icon for the theme you would switch to. */
+.theme-icon-light { display: none; }
+:root[data-theme="dark"] .theme-icon-light { display: block; }
+:root[data-theme="dark"] .theme-icon-dark { display: none; }
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) .theme-icon-light { display: block; }
+  :root:not([data-theme="light"]) .theme-icon-dark { display: none; }
+}
+
+body {
+  background: var(--c-paper);
+  color: var(--c-ink);
+  font-family: var(--font-sans);
+  font-weight: 400;
+  overflow-x: clip;
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Weight 400 everywhere: hierarchy comes from scale and tracking only. */
+h1,
+h2,
+h3,
+h4,
+th,
+strong,
+b {
+  font-weight: 400;
+}
+
+::selection {
+  background: var(--c-ink);
+  color: var(--c-paper);
+}
+
+:focus-visible {
+  outline: 1px solid var(--c-ink);
+  outline-offset: 2px;
+}
+
+/* Charts: hairline grid, 2px lines, 10% area wash (see DESIGN.md › Charts). */
+.chart-grid { stroke: var(--c-mist); stroke-width: 1; shape-rendering: crispEdges; }
+.chart-axis { fill: var(--c-warm-gray); font-size: 11px; font-variant-numeric: tabular-nums; }

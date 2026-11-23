@@ -1,0 +1,703 @@
+openapi: 3.1.0
+info:
+  title: FinCore Payments API
+  version: 1.0.0
+  description: |
+    Ledger-backed payment processing. Every money movement is a balanced,
+    immutable double-entry ledger transaction.
+
+    **Amounts** are integers in minor units (paise for INR).
+
+    **Authentication**
+    - Merchant endpoints: `Authorization: Bearer fc_test_...` (issued when an admin creates the merchant).
+    - Admin endpoints (`/v1/admin/*`): `Authorization: Bearer <ADMIN_API_TOKEN>`.
+
+    **Idempotency.** Every `POST` under `/v1` (except settlement imports) requires an
+    `Idempotency-Key` header (1-255 chars). Retries with the same key and body replay
+    the original response with `Idempotent-Replayed: true`; a different body returns 422.
+    Keys are scoped per merchant and kept for 24 hours.
+
+    **Pagination.** List endpoints return `{data, next_cursor, has_more}`, newest first.
+    Pass `next_cursor` back as `?cursor=` for the next page; keyset-based, so no rows are skipped or repeated.
+
+    **Modes.** Like Razorpay, test and live are fully separate: separate servers, databases and keys
+    (`fc_test_…` / `fc_live_…`). Every response carries `FinCore-Mode`; a key for the other mode is refused with `wrong_mode`.
+
+    **Rate limits.** Responses carry `X-RateLimit-Limit`, `X-RateLimit-Remaining` and
+    `X-RateLimit-Reset`; over the limit returns 429 with `Retry-After`.
+
+    **Webhooks to merchants** are signed: `FinCore-Signature: t=<unix>,v1=<hex HMAC-SHA256(secret, "<t>.<body>")>`,
+    with the event ID in `FinCore-Event-Id`. Delivery is at least once.
+servers:
+  - url: http://localhost:8080
+security:
+  - merchantKey: []
+tags:
+  - name: Payments
+  - name: Refunds
+  - name: Payouts
+  - name: Merchant
+  - name: Admin
+  - name: Public
+
+paths:
+  /healthz:
+    get:
+      tags: [Public]
+      summary: Dependency health
+      security: []
+      responses:
+        "200": { description: All dependencies healthy }
+        "503": { description: A dependency is down }
+  /openapi.yaml:
+    get:
+      tags: [Public]
+      summary: This document
+      security: []
+      responses:
+        "200": { description: OpenAPI document }
+  /webhooks/razorpay:
+    post:
+      tags: [Public]
+      summary: Razorpay webhook receiver
+      description: Verified with `X-Razorpay-Signature`; deduplicated by `X-Razorpay-Event-Id`.
+      security: []
+      responses:
+        "200": { description: Processed, duplicate, or rejected for review }
+        "401": { $ref: "#/components/responses/Error" }
+        "500": { description: Transient failure; Razorpay will retry }
+  /dev/checkout/{id}:
+    get:
+      tags: [Public]
+      summary: Dev-only Razorpay Checkout page (sandbox mode)
+      security: []
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: HTML page }
+        "409": { $ref: "#/components/responses/Error" }
+
+  /v1/payments/{id}/confirm:
+    post:
+      tags: [Public, Payments]
+      summary: Confirm a payment with the provider's signed checkout result
+      description: Needs no API key; only a provider-signed proof can move the payment.
+      security: []
+      parameters: [{ $ref: "#/components/parameters/ID" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              properties:
+                razorpay_payment_id: { type: string }
+                razorpay_order_id: { type: string }
+                razorpay_signature: { type: string }
+      responses:
+        "200": { $ref: "#/components/responses/Payment" }
+        "400": { $ref: "#/components/responses/Error" }
+
+  /v1/merchants/me:
+    get:
+      tags: [Merchant]
+      summary: The authenticated merchant
+      responses:
+        "200": { description: Merchant, content: { application/json: { schema: { $ref: "#/components/schemas/Merchant" } } } }
+  /v1/merchants/me/balance:
+    get:
+      tags: [Merchant]
+      summary: Available balance and pending payouts
+      responses:
+        "200": { description: Balance, content: { application/json: { schema: { $ref: "#/components/schemas/MerchantBalance" } } } }
+  /v1/merchants/me/statement:
+    get:
+      tags: [Merchant]
+      summary: Ledger statement with running balance
+      parameters: [{ $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" }]
+      responses:
+        "200": { description: Statement, content: { application/json: { schema: { $ref: "#/components/schemas/Statement" } } } }
+  /v1/merchants/me/webhook-endpoint:
+    post:
+      tags: [Merchant]
+      summary: Set (or rotate) the webhook endpoint; returns the signing secret once
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [url], properties: { url: { type: string, format: uri } } } } }
+      responses:
+        "200": { description: Endpoint, content: { application/json: { schema: { type: object, properties: { url: { type: string }, secret: { type: string } } } } } }
+
+  /v1/payments:
+    post:
+      tags: [Payments]
+      summary: Create a payment
+      description: |
+        Sandbox payments authorize immediately (and capture, for `automatic`).
+        Razorpay payments return `status: created` with `next_action` for Checkout.
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [amount, currency]
+              properties:
+                amount: { type: integer, minimum: 1, example: 100000 }
+                currency: { type: string, example: INR }
+                capture_method: { type: string, enum: [automatic, manual], default: automatic }
+                payment_method:
+                  type: string
+                  description: Sandbox test method
+                  enum: [pm_card_success, pm_card_declined, pm_card_insufficient_funds, pm_card_provider_error]
+                description: { type: string }
+                provider: { type: string, enum: [sandbox, razorpay] }
+      responses:
+        "201": { $ref: "#/components/responses/Payment" }
+        "400": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+        "502": { $ref: "#/components/responses/Error" }
+    get:
+      tags: [Payments]
+      summary: List payments (newest first)
+      parameters: [{ $ref: "#/components/parameters/Status" }, { $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Cursor" }]
+      responses:
+        "200": { $ref: "#/components/responses/PaymentList" }
+  /v1/payments/{id}:
+    get:
+      tags: [Payments]
+      summary: Get a payment
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { $ref: "#/components/responses/Payment" }
+        "404": { $ref: "#/components/responses/Error" }
+  /v1/payments/{id}/events:
+    get:
+      tags: [Payments]
+      summary: Append-only audit trail of state changes
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: Events, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/PaymentEvent" } } } } } } }
+  /v1/payments/{id}/capture:
+    post:
+      tags: [Payments]
+      summary: Capture an authorized payment (optionally partial)
+      parameters: [{ $ref: "#/components/parameters/ID" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { amount: { type: integer } } } } }
+      responses:
+        "200": { $ref: "#/components/responses/Payment" }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/payments/{id}/cancel:
+    post:
+      tags: [Payments]
+      summary: Void an uncaptured authorization
+      parameters: [{ $ref: "#/components/parameters/ID" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      responses:
+        "200": { $ref: "#/components/responses/Payment" }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/payments/{id}/refunds:
+    post:
+      tags: [Refunds]
+      summary: Refund all or part of a captured payment (fee returned pro rata)
+      parameters: [{ $ref: "#/components/parameters/ID" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { amount: { type: integer }, reason: { type: string } } } } }
+      responses:
+        "201": { description: Refund, content: { application/json: { schema: { $ref: "#/components/schemas/Refund" } } } }
+        "409": { $ref: "#/components/responses/Error" }
+        "422": { $ref: "#/components/responses/Error" }
+    get:
+      tags: [Refunds]
+      summary: List a payment's refunds
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: Refunds, content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Refund" } } } } } } }
+
+  /v1/payouts:
+    post:
+      tags: [Payouts]
+      summary: Pay out available balance to the merchant's bank
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [amount], properties: { amount: { type: integer, minimum: 1 } } } } }
+      responses:
+        "201": { $ref: "#/components/responses/Payout" }
+        "422": { $ref: "#/components/responses/Error" }
+    get:
+      tags: [Payouts]
+      summary: List payouts
+      parameters: [{ $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Cursor" }]
+      responses:
+        "200": { $ref: "#/components/responses/PayoutList" }
+  /v1/payouts/{id}:
+    get:
+      tags: [Payouts]
+      summary: Get a payout
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { $ref: "#/components/responses/Payout" }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/admin/stats:
+    get:
+      tags: [Admin]
+      summary: Platform totals and operational counters
+      security: [{ adminToken: [] }]
+      responses:
+        "200": { description: Stats }
+  /v1/admin/analytics:
+    get:
+      tags: [Admin]
+      summary: Daily volume, success rate, status mix and top merchants
+      description: Calendar days in IST; includes the previous period of equal length for deltas.
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: days, in: query, schema: { type: integer, enum: [7, 30, 90], default: 30 } }
+      responses:
+        "200": { description: Analytics }
+  /v1/admin/search:
+    get:
+      tags: [Admin]
+      summary: Find payments (ID prefix, provider IDs, description) and merchants (ID prefix, name)
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: q, in: query, required: true, schema: { type: string, minLength: 2 } }
+      responses:
+        "200": { description: Matching payments and merchants }
+  /v1/admin/merchants:
+    post:
+      tags: [Admin]
+      summary: Create a merchant and its first API key (secret shown once)
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [name, currency]
+              properties:
+                name: { type: string }
+                currency: { type: string, example: INR }
+                fee_bps: { type: integer, default: 200, description: "Platform fee in basis points (200 = 2%)" }
+      responses:
+        "201": { description: Merchant and API key, content: { application/json: { schema: { type: object, properties: { merchant: { $ref: "#/components/schemas/Merchant" }, api_key: { $ref: "#/components/schemas/APIKey" } } } } } }
+    get:
+      tags: [Admin]
+      summary: List merchants
+      security: [{ adminToken: [] }]
+      responses:
+        "200": { description: Merchants }
+  /v1/admin/merchants/{id}:
+    get:
+      tags: [Admin]
+      summary: Get a merchant
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: Merchant, content: { application/json: { schema: { $ref: "#/components/schemas/Merchant" } } } }
+  /v1/admin/merchants/{id}/balance:
+    get:
+      tags: [Admin]
+      summary: A merchant's balance
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: Balance, content: { application/json: { schema: { $ref: "#/components/schemas/MerchantBalance" } } } }
+  /v1/admin/merchants/{id}/statement:
+    get:
+      tags: [Admin]
+      summary: A merchant's ledger statement
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }, { $ref: "#/components/parameters/From" }, { $ref: "#/components/parameters/To" }]
+      responses:
+        "200": { description: Statement, content: { application/json: { schema: { $ref: "#/components/schemas/Statement" } } } }
+  /v1/admin/merchants/{id}/api-keys:
+    get:
+      tags: [Admin]
+      summary: List a merchant's API keys
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: Keys (without secrets) }
+    post:
+      tags: [Admin]
+      summary: Issue another API key (secret shown once)
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      responses:
+        "201": { description: Key, content: { application/json: { schema: { $ref: "#/components/schemas/APIKey" } } } }
+  /v1/admin/merchants/{id}/api-keys/{keyID}/revoke:
+    post:
+      tags: [Admin]
+      summary: Revoke an API key
+      security: [{ adminToken: [] }]
+      parameters:
+        - { $ref: "#/components/parameters/ID" }
+        - { name: keyID, in: path, required: true, schema: { type: string, format: uuid } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "200": { description: Revoked key }
+  /v1/admin/payments:
+    get:
+      tags: [Admin]
+      summary: List payments across merchants
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/MerchantID" }, { $ref: "#/components/parameters/Status" }, { $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Cursor" }]
+      responses:
+        "200": { $ref: "#/components/responses/PaymentList" }
+  /v1/admin/payments/{id}:
+    get:
+      tags: [Admin]
+      summary: Payment with events and refunds
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: Payment detail }
+  /v1/admin/payouts:
+    get:
+      tags: [Admin]
+      summary: List payouts across merchants
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/MerchantID" }, { $ref: "#/components/parameters/Limit" }, { $ref: "#/components/parameters/Cursor" }]
+      responses:
+        "200": { $ref: "#/components/responses/PayoutList" }
+  /v1/admin/sandbox/payouts/{id}/paid:
+    post:
+      tags: [Admin]
+      summary: Simulate the bank confirming a payout (sandbox mode)
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      responses:
+        "200": { $ref: "#/components/responses/Payout" }
+  /v1/admin/sandbox/payouts/{id}/failed:
+    post:
+      tags: [Admin]
+      summary: Simulate the bank rejecting a payout (sandbox mode)
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }, { $ref: "#/components/parameters/IdempotencyKey" }]
+      requestBody:
+        content: { application/json: { schema: { type: object, properties: { reason: { type: string } } } } }
+      responses:
+        "200": { $ref: "#/components/responses/Payout" }
+  /v1/admin/ledger/accounts:
+    get:
+      tags: [Admin]
+      summary: Ledger accounts with balances
+      security: [{ adminToken: [] }]
+      parameters: [{ name: prefix, in: query, schema: { type: string, example: "system:" } }]
+      responses:
+        "200": { description: Accounts }
+  /v1/admin/ledger/integrity:
+    get:
+      tags: [Admin]
+      summary: Trial balance and cached-balance verification
+      security: [{ adminToken: [] }]
+      responses:
+        "200": { description: Integrity report, content: { application/json: { schema: { type: object, properties: { ok: { type: boolean }, trial_balance: { type: array, items: { type: object } }, mismatches: { type: array, items: { type: object } } } } } } }
+  /v1/admin/ledger/transactions/{id}:
+    get:
+      tags: [Admin]
+      summary: A ledger transaction with its postings
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: Transaction }
+  /v1/admin/settlements:
+    post:
+      tags: [Admin]
+      summary: Import a settlement CSV and reconcile it
+      description: |
+        Body is the CSV itself (max 20 MB):
+        `settlement_id,entity_type,entity_id,amount,fee,tax,currency,settled_at`.
+        Importing the same file again returns the original report (200).
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: provider, in: query, required: true, schema: { type: string, enum: [sandbox, razorpay] } }
+        - { name: source, in: query, schema: { type: string } }
+      requestBody:
+        required: true
+        content: { text/csv: { schema: { type: string } } }
+      responses:
+        "201": { description: Reconciliation report }
+        "200": { description: Same file imported before }
+        "400": { $ref: "#/components/responses/Error" }
+    get:
+      tags: [Admin]
+      summary: List reconciliation runs
+      security: [{ adminToken: [] }]
+      responses:
+        "200": { description: Reports }
+  /v1/admin/settlements/{id}:
+    get:
+      tags: [Admin]
+      summary: A reconciliation report with every line's result
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: Report }
+  /v1/admin/outbox:
+    get:
+      tags: [Admin]
+      summary: Outbound webhook events
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: status, in: query, schema: { type: string, enum: [pending, delivered, skipped, dead] } }
+        - { $ref: "#/components/parameters/MerchantID" }
+        - { $ref: "#/components/parameters/Cursor" }
+        - { $ref: "#/components/parameters/Limit" }
+      responses:
+        "200": { description: Events }
+  /v1/admin/outbox/{eventID}/requeue:
+    post:
+      tags: [Admin]
+      summary: Send a dead-lettered event back for delivery
+      security: [{ adminToken: [] }]
+      parameters:
+        - { name: eventID, in: path, required: true, schema: { type: integer } }
+        - { $ref: "#/components/parameters/IdempotencyKey" }
+      responses:
+        "200": { description: Requeued }
+        "404": { $ref: "#/components/responses/Error" }
+
+  /v1/admin/operators/login:
+    post:
+      tags: [Admin]
+      summary: Check an operator's email and password (dashboard sign-in)
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [email, password], properties: { email: { type: string }, password: { type: string } } } } }
+      responses:
+        "200": { description: Operator, content: { application/json: { schema: { $ref: "#/components/schemas/Operator" } } } }
+        "401": { $ref: "#/components/responses/Error" }
+  /v1/admin/operators:
+    get:
+      tags: [Admin]
+      summary: Operators and open invites
+      security: [{ adminToken: [] }]
+      responses:
+        "200": { description: Operators and invites }
+  /v1/admin/operators/events:
+    get:
+      tags: [Admin]
+      summary: Operator audit trail (newest first)
+      security: [{ adminToken: [] }]
+      responses:
+        "200": { description: Events }
+  /v1/admin/operators/{id}:
+    get:
+      tags: [Admin]
+      summary: An operator (used to re-validate dashboard sessions)
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }]
+      responses:
+        "200": { description: Operator, content: { application/json: { schema: { $ref: "#/components/schemas/Operator" } } } }
+  /v1/admin/operators/{id}/access:
+    post:
+      tags: [Admin]
+      summary: Change role and/or status; the last active admin is protected
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }, { $ref: "#/components/parameters/IdempotencyKey" }, { $ref: "#/components/parameters/OperatorID" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [role, status], properties: { role: { type: string, enum: [admin, viewer] }, status: { type: string, enum: [active, disabled] } } } } }
+      responses:
+        "200": { description: Operator }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/admin/invites:
+    post:
+      tags: [Admin]
+      summary: Invite an operator; returns a one-time token (valid 72 h)
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/OperatorID" }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [email, role], properties: { email: { type: string, format: email }, role: { type: string, enum: [admin, viewer] } } } } }
+      responses:
+        "201": { description: Invite and token }
+        "409": { $ref: "#/components/responses/Error" }
+  /v1/admin/invites/lookup:
+    post:
+      tags: [Admin]
+      summary: Look up an open invite by token (accept page)
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [token], properties: { token: { type: string } } } } }
+      responses:
+        "200": { description: Invite }
+        "410": { $ref: "#/components/responses/Error" }
+  /v1/admin/invites/accept:
+    post:
+      tags: [Admin]
+      summary: Accept an invite, creating the account (token works once)
+      security: [{ adminToken: [] }]
+      requestBody:
+        required: true
+        content: { application/json: { schema: { type: object, required: [token, name, password], properties: { token: { type: string }, name: { type: string }, password: { type: string, minLength: 12 } } } } }
+      responses:
+        "201": { description: Operator, content: { application/json: { schema: { $ref: "#/components/schemas/Operator" } } } }
+        "410": { $ref: "#/components/responses/Error" }
+  /v1/admin/invites/{id}/revoke:
+    post:
+      tags: [Admin]
+      summary: Revoke an open invite
+      security: [{ adminToken: [] }]
+      parameters: [{ $ref: "#/components/parameters/ID" }, { $ref: "#/components/parameters/IdempotencyKey" }, { $ref: "#/components/parameters/OperatorID" }]
+      responses:
+        "200": { description: Revoked }
+        "404": { $ref: "#/components/responses/Error" }
+
+components:
+  securitySchemes:
+    merchantKey: { type: http, scheme: bearer, description: "Merchant API key (fc_test_...)" }
+    adminToken: { type: http, scheme: bearer, description: "ADMIN_API_TOKEN" }
+  parameters:
+    ID: { name: id, in: path, required: true, schema: { type: string, format: uuid } }
+    IdempotencyKey: { name: Idempotency-Key, in: header, required: true, schema: { type: string, maxLength: 255 } }
+    Limit: { name: limit, in: query, schema: { type: integer, minimum: 1, maximum: 200, default: 50 } }
+    Cursor: { name: cursor, in: query, description: "Opaque next_cursor from the previous page; omit for the first page", schema: { type: string } }
+    Status: { name: status, in: query, schema: { type: string } }
+    MerchantID: { name: merchant_id, in: query, schema: { type: string, format: uuid } }
+    OperatorID: { name: FinCore-Operator-Id, in: header, description: "Acting operator, recorded in the audit trail", schema: { type: string, format: uuid } }
+    From: { name: from, in: query, schema: { type: string, description: "RFC 3339 or YYYY-MM-DD; default 30 days before `to`" } }
+    To: { name: to, in: query, schema: { type: string, description: "RFC 3339 or YYYY-MM-DD; default now" } }
+  responses:
+    Error:
+      description: Error
+      content: { application/json: { schema: { $ref: "#/components/schemas/Error" } } }
+    Payment:
+      description: Payment
+      content: { application/json: { schema: { $ref: "#/components/schemas/Payment" } } }
+    PaymentList:
+      description: Payments
+      content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Payment" } }, next_cursor: { type: [string, "null"] }, has_more: { type: boolean } } } } }
+    Payout:
+      description: Payout
+      content: { application/json: { schema: { $ref: "#/components/schemas/Payout" } } }
+    PayoutList:
+      description: Payouts
+      content: { application/json: { schema: { type: object, properties: { data: { type: array, items: { $ref: "#/components/schemas/Payout" } }, next_cursor: { type: [string, "null"] }, has_more: { type: boolean } } } } }
+  schemas:
+    Operator:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        email: { type: string }
+        name: { type: string }
+        role: { type: string, enum: [admin, viewer] }
+        status: { type: string, enum: [active, disabled] }
+        session_version: { type: integer }
+        last_login_at: { type: [string, "null"], format: date-time }
+    Error:
+      type: object
+      properties:
+        error:
+          type: object
+          properties:
+            code:
+              type: string
+              enum: [invalid_request, invalid_json, unauthenticated, not_found, invalid_state, insufficient_funds,
+                     wrong_mode, bad_credentials, invite_invalid, last_admin, conflict, idempotency_key_required, idempotency_key_reused, request_in_progress, rate_limited,
+                     provider_unavailable, internal_error]
+            message: { type: string }
+    Merchant:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        name: { type: string }
+        currency: { type: string }
+        fee_bps: { type: integer }
+        payable_account_id: { type: string, format: uuid }
+        webhook_url: { type: [string, "null"] }
+        created_at: { type: string, format: date-time }
+    APIKey:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        prefix: { type: string, example: fc_test_3f9a1c }
+        secret: { type: string, description: Only present when the key is created }
+        created_at: { type: string, format: date-time }
+        revoked_at: { type: [string, "null"], format: date-time }
+    MerchantBalance:
+      type: object
+      properties:
+        currency: { type: string }
+        available: { type: integer }
+        pending_payouts: { type: integer }
+    Payment:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        merchant_id: { type: string, format: uuid }
+        amount: { type: integer }
+        currency: { type: string }
+        status: { type: string, enum: [created, authorized, captured, partially_refunded, refunded, canceled, failed] }
+        capture_method: { type: string, enum: [automatic, manual] }
+        provider: { type: string }
+        provider_ref: { type: [string, "null"] }
+        provider_payment_id: { type: [string, "null"] }
+        next_action: { type: object, description: "Present while status is created and the customer must act" }
+        amount_captured: { type: integer }
+        amount_refunded: { type: integer }
+        fee_amount: { type: integer }
+        failure_reason: { type: [string, "null"] }
+        capture_ledger_txn_id: { type: [string, "null"], format: uuid }
+        created_at: { type: string, format: date-time }
+        updated_at: { type: string, format: date-time }
+    PaymentEvent:
+      type: object
+      properties:
+        id: { type: integer }
+        from_status: { type: [string, "null"] }
+        to_status: { type: string }
+        amount: { type: [integer, "null"] }
+        ledger_txn_id: { type: [string, "null"] }
+        note: { type: string }
+        created_at: { type: string, format: date-time }
+    Refund:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        payment_id: { type: string, format: uuid }
+        amount: { type: integer }
+        status: { type: string, enum: [pending, succeeded, failed] }
+        provider_refund_id: { type: [string, "null"] }
+        failure_reason: { type: [string, "null"] }
+        ledger_txn_id: { type: string, format: uuid }
+        reversal_ledger_txn_id: { type: [string, "null"] }
+    Payout:
+      type: object
+      properties:
+        id: { type: string, format: uuid }
+        merchant_id: { type: string, format: uuid }
+        amount: { type: integer }
+        currency: { type: string }
+        status: { type: string, enum: [pending, paid, failed] }
+        failure_reason: { type: [string, "null"] }
+        hold_ledger_txn_id: { type: string, format: uuid }
+        settle_ledger_txn_id: { type: [string, "null"] }
+    Statement:
+      type: object
+      properties:
+        currency: { type: string }
+        from: { type: string, format: date-time }
+        to: { type: string, format: date-time }
+        opening_balance: { type: integer }
+        closing_balance: { type: integer }
+        truncated: { type: boolean }
+        lines:
+          type: array
+          items:
+            type: object
+            properties:
+              transaction_id: { type: string, format: uuid }
+              description: { type: string }
+              direction: { type: string, enum: [debit, credit] }
+              amount: { type: integer }
+              effective_at: { type: string, format: date-time }
+              balance: { type: integer }

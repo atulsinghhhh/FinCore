@@ -1,0 +1,128 @@
+name: fincore
+
+# Profiles:
+#   (default)       postgres + dragonfly, for running the Go apps on the host
+#   app             + api, worker, migrations, built from the Dockerfile
+#   observability   + prometheus, grafana, jaeger
+#
+#   docker compose up -d
+#   docker compose --profile app --profile observability up -d --build
+
+x-app-env: &app-env
+  DATABASE_URL: postgres://${POSTGRES_USER:-fincore}:${POSTGRES_PASSWORD:-fincore}@postgres:5432/${POSTGRES_DB:-fincore}?sslmode=disable
+  DRAGONFLY_ADDR: dragonfly:6379
+  DRAGONFLY_PASSWORD: ${DRAGONFLY_PASSWORD:-fincore}
+  ADMIN_API_TOKEN: ${ADMIN_API_TOKEN:-}
+  PAYMENT_PROVIDER: ${PAYMENT_PROVIDER:-sandbox}
+  RAZORPAY_KEY_ID: ${RAZORPAY_KEY_ID:-}
+  RAZORPAY_KEY_SECRET: ${RAZORPAY_KEY_SECRET:-}
+  RAZORPAY_WEBHOOK_SECRET: ${RAZORPAY_WEBHOOK_SECRET:-}
+  SANDBOX: ${SANDBOX:-true}
+  OTEL_EXPORTER_OTLP_ENDPOINT: ${OTEL_EXPORTER_OTLP_ENDPOINT:-}
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: fincore-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-fincore}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-fincore}
+      POSTGRES_DB: ${POSTGRES_DB:-fincore}
+    ports:
+      - "${POSTGRES_PORT:-5434}:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-fincore} -d ${POSTGRES_DB:-fincore}"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  dragonfly:
+    image: docker.dragonflydb.io/dragonflydb/dragonfly:v1.27.1
+    container_name: fincore-dragonfly
+    restart: unless-stopped
+    command: ["--requirepass", "${DRAGONFLY_PASSWORD:-fincore}", "--cache_mode=false"]
+    ulimits:
+      memlock: -1
+    ports:
+      - "${DRAGONFLY_PORT:-6379}:6379"
+    volumes:
+      - dragonfly_data:/data
+    healthcheck:
+      test: ["CMD-SHELL", "redis-cli -a ${DRAGONFLY_PASSWORD:-fincore} ping | grep PONG"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  migrate:
+    profiles: [app]
+    build: .
+    entrypoint: ["/usr/local/bin/migrate", "up"]
+    environment: *app-env
+    depends_on:
+      postgres: { condition: service_healthy }
+
+  api:
+    profiles: [app]
+    build: .
+    container_name: fincore-api
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/api"]
+    environment:
+      <<: *app-env
+      OTEL_SERVICE_NAME: fincore-api
+    ports:
+      - "${HTTP_PORT:-8080}:8080"
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      dragonfly: { condition: service_healthy }
+
+  worker:
+    profiles: [app]
+    build: .
+    container_name: fincore-worker
+    restart: unless-stopped
+    entrypoint: ["/usr/local/bin/worker"]
+    environment: *app-env
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+
+  prometheus:
+    profiles: [observability]
+    image: prom/prometheus:v3.5.0
+    container_name: fincore-prometheus
+    command: ["--config.file=/etc/prometheus/prometheus.yml", "--web.enable-lifecycle"]
+    volumes:
+      - ./deploy/prometheus:/etc/prometheus:ro
+    ports:
+      - "9090:9090"
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  grafana:
+    profiles: [observability]
+    image: grafana/grafana:12.1.1
+    container_name: fincore-grafana
+    environment:
+      GF_AUTH_ANONYMOUS_ENABLED: "true"
+      GF_AUTH_ANONYMOUS_ORG_ROLE: Viewer
+    volumes:
+      - ./deploy/grafana/provisioning:/etc/grafana/provisioning:ro
+      - ./deploy/grafana/dashboards:/var/lib/grafana/dashboards:ro
+    ports:
+      - "3001:3000"
+    depends_on: [prometheus]
+
+  jaeger:
+    profiles: [observability]
+    image: jaegertracing/jaeger:2.10.0
+    container_name: fincore-jaeger
+    ports:
+      - "16686:16686" # UI
+      - "4318:4318"   # OTLP/HTTP
+
+volumes:
+  postgres_data:
+  dragonfly_data:

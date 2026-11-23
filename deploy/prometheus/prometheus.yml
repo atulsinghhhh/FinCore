@@ -1,0 +1,15 @@
+global:
+  scrape_interval: 10s
+
+rule_files:
+  - /etc/prometheus/alerts.yml
+
+scrape_configs:
+  # In compose (profile "app") the services are reachable by name; when the
+  # Go binaries run on the host, use host.docker.internal.
+  - job_name: fincore-api
+    static_configs:
+      - targets: ["api:9091", "host.docker.internal:9091"]
+  - job_name: fincore-worker
+    static_configs:
+      - targets: ["worker:9092", "host.docker.internal:9092"]
